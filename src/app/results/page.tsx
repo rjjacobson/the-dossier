@@ -2,30 +2,50 @@ import { Suspense } from 'react';
 import Link from 'next/link';
 import { LevelGroup } from '@/components/LevelGroup';
 import { LEVEL_GROUP_ORDER, LEVEL_TO_GROUP } from '@/lib/constants';
+import { createClient } from '@/lib/supabase/server';
 import type { OfficialWithGrade, OfficeLevelGroup } from '@/lib/types';
 
-// Demo data for development before Supabase is connected
-const DEMO_OFFICIALS: OfficialWithGrade[] = [
-  { id: 1, name: 'Kirsten Gillibrand', slug: 'kirsten-gillibrand', level: 'federal_senate', district_id: null, party: 'Democrat', photo_url: null, score: 1.8, grade: 'A', evidence_count: 5, created_at: '', updated_at: '' },
-  { id: 2, name: 'Chuck Schumer', slug: 'chuck-schumer', level: 'federal_senate', district_id: null, party: 'Democrat', photo_url: null, score: 1.6, grade: 'A', evidence_count: 8, created_at: '', updated_at: '' },
-  { id: 3, name: 'Jerry Nadler', slug: 'jerry-nadler', level: 'federal_house', district_id: null, party: 'Democrat', photo_url: null, score: 0.8, grade: 'B', evidence_count: 4, created_at: '', updated_at: '' },
-  { id: 4, name: 'Brad Hoylman-Sigal', slug: 'brad-hoylman-sigal', level: 'state_senate', district_id: null, party: 'Democrat', photo_url: null, score: -0.2, grade: 'C', evidence_count: 3, created_at: '', updated_at: '' },
-  { id: 5, name: 'Linda Rosenthal', slug: 'linda-rosenthal', level: 'state_assembly', district_id: null, party: 'Democrat', photo_url: null, score: 1.0, grade: 'B', evidence_count: 3, created_at: '', updated_at: '' },
-  { id: 6, name: 'Erik Bottcher', slug: 'erik-bottcher', level: 'city_council', district_id: null, party: 'Democrat', photo_url: null, score: -1.2, grade: 'D', evidence_count: 4, created_at: '', updated_at: '' },
-  { id: 7, name: 'Alvin Bragg', slug: 'alvin-bragg', level: 'county_da', district_id: null, party: 'Democrat', photo_url: null, score: null, grade: 'N/R', evidence_count: 1, created_at: '', updated_at: '' },
-];
+async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippets: Record<number, string> }> {
+  const supabase = await createClient();
 
-const DEMO_SNIPPETS: Record<number, string> = {
-  1: 'Unwavering support for Israel\'s right to self-defense',
-  2: 'Longtime advocate for US-Israel relationship',
-  3: 'Voted for Iron Dome funding; criticized settlements',
-  4: 'Mixed record, supported antisemitism bill, silent on BDS',
-  5: 'Co-sponsored anti-BDS legislation in 2024',
-  6: 'Refused to sign letter condemning campus antisemitism',
-  7: 'No public statements on Israel',
-};
+  // Get all officials with computed grades via the view
+  const { data: officials, error } = await supabase
+    .from('officials_with_grades')
+    .select('*')
+    .order('level')
+    .order('name');
 
-function ResultsContent({ address }: { address: string }) {
+  if (error || !officials) {
+    console.error('Failed to fetch officials:', error);
+    return { officials: [], snippets: {} };
+  }
+
+  // Get one snippet (most recent evidence quote) per official
+  const officialIds = officials.map((o: OfficialWithGrade) => o.id);
+  const { data: evidenceSnippets } = await supabase
+    .from('evidence')
+    .select('official_id, quote')
+    .in('official_id', officialIds)
+    .eq('verified', true)
+    .order('date', { ascending: false });
+
+  const snippets: Record<number, string> = {};
+  if (evidenceSnippets) {
+    for (const e of evidenceSnippets) {
+      if (!snippets[e.official_id]) {
+        snippets[e.official_id] = e.quote.length > 100
+          ? e.quote.slice(0, 100) + '...'
+          : e.quote;
+      }
+    }
+  }
+
+  return { officials: officials as OfficialWithGrade[], snippets };
+}
+
+async function ResultsContent({ address }: { address: string }) {
+  const { officials, snippets } = await getOfficials();
+
   // Group officials by level group
   const grouped: Record<OfficeLevelGroup, OfficialWithGrade[]> = {
     'Federal': [],
@@ -36,10 +56,12 @@ function ResultsContent({ address }: { address: string }) {
     'Political': [],
   };
 
-  for (const official of DEMO_OFFICIALS) {
+  for (const official of officials) {
     const group = LEVEL_TO_GROUP[official.level];
-    grouped[group].push(official);
+    if (group) grouped[group].push(official);
   }
+
+  const hasOfficials = officials.length > 0;
 
   return (
     <div className="max-w-[720px] mx-auto px-4 py-8">
@@ -48,22 +70,26 @@ function ResultsContent({ address }: { address: string }) {
         <div className="text-[13px] text-gray-500 text-right">{address}</div>
       </div>
 
-      {LEVEL_GROUP_ORDER.map((group) => (
-        <LevelGroup
-          key={group}
-          label={group}
-          officials={grouped[group]}
-          snippets={DEMO_SNIPPETS}
-        />
-      ))}
+      {!hasOfficials ? (
+        <div className="text-center py-12">
+          <p className="text-gray-500 mb-2">We don&apos;t have coverage for this area yet.</p>
+          <p className="text-sm text-gray-400">Help us by suggesting an official to track.</p>
+        </div>
+      ) : (
+        LEVEL_GROUP_ORDER.map((group) => {
+          if (grouped[group].length === 0) return null;
+          return (
+            <LevelGroup
+              key={group}
+              label={group}
+              officials={grouped[group]}
+              snippets={snippets}
+            />
+          );
+        })
+      )}
 
-      <div className="mt-6 p-3 bg-gray-50 rounded-md">
-        <p className="text-[11px] text-gray-400 italic">
-          This is demo data. Connect to Supabase and import district boundaries to see real results for your address.
-        </p>
-      </div>
-
-      <div className="mt-4">
+      <div className="mt-6">
         <Link href="/" className="text-sm text-[#1a3a5c] hover:underline">
           ← Look up another address
         </Link>

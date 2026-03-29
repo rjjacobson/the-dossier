@@ -1,6 +1,57 @@
 import { AddressInput } from '@/components/AddressInput';
+import { createClient } from '@/lib/supabase/server';
 
-export default function Home() {
+interface RecentActivity {
+  id: number;
+  quote: string;
+  stance: string;
+  date: string | null;
+  source_name: string;
+  official_name: string;
+  official_level: string;
+}
+
+async function getRecentActivity(): Promise<RecentActivity[]> {
+  try {
+    const supabase = await createClient();
+    const { data } = await supabase
+      .from('evidence')
+      .select('id, quote, stance, date, source_name, official_id')
+      .eq('verified', true)
+      .order('date', { ascending: false })
+      .limit(5);
+
+    if (!data || data.length === 0) return [];
+
+    // Get official names for these evidence items
+    const officialIds = [...new Set(data.map((e: { official_id: number }) => e.official_id))];
+    const { data: officials } = await supabase
+      .from('officials')
+      .select('id, name, level')
+      .in('id', officialIds);
+
+    const officialMap = new Map((officials || []).map((o: { id: number; name: string; level: string }) => [o.id, o]));
+
+    return data.map((e: { id: number; quote: string; stance: string; date: string | null; source_name: string; official_id: number }) => {
+      const official = officialMap.get(e.official_id);
+      return {
+        id: e.id,
+        quote: e.quote.length > 120 ? e.quote.slice(0, 120) + '...' : e.quote,
+        stance: e.stance,
+        date: e.date,
+        source_name: e.source_name,
+        official_name: official?.name || 'Unknown',
+        official_level: official?.level || '',
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export default async function Home() {
+  const activity = await getRecentActivity();
+
   return (
     <div className="max-w-[720px] mx-auto px-4">
       <div className="text-center py-16 sm:py-24">
@@ -14,33 +65,35 @@ export default function Home() {
         <AddressInput />
       </div>
 
-      <div className="border-t border-gray-100 pt-5 pb-12">
-        <h3 className="text-[13px] font-semibold text-gray-500 mb-3">
-          Recent Activity
-        </h3>
-        <div className="space-y-0">
-          <ActivityItem
-            severity="red"
-            text="City Council Member voted against Holocaust education funding amendment"
-            date="Sample data"
-          />
-          <ActivityItem
-            severity="yellow"
-            text="State Senator co-sponsored BDS resolution in Albany"
-            date="Sample data"
-          />
-          <ActivityItem
-            severity="green"
-            text="Assembly Member co-sponsored anti-hate crimes legislation"
-            date="Sample data"
-          />
+      {activity.length > 0 && (
+        <div className="border-t border-gray-100 pt-5 pb-12">
+          <h3 className="text-[13px] font-semibold text-gray-500 mb-3">
+            Recent Activity
+          </h3>
+          <div className="space-y-0">
+            {activity.map((item) => (
+              <ActivityItem
+                key={item.id}
+                severity={stanceToSeverity(item.stance)}
+                text={`${item.official_name}: ${item.quote}`}
+                date={item.date ? formatDate(item.date) : item.source_name}
+              />
+            ))}
+          </div>
         </div>
-        <p className="text-[11px] text-gray-400 mt-3 italic">
-          Activity shown is sample data. Connect to Supabase to see real entries.
-        </p>
-      </div>
+      )}
     </div>
   );
+}
+
+function stanceToSeverity(stance: string): 'red' | 'yellow' | 'green' {
+  if (stance.includes('opposed')) return 'red';
+  if (stance === 'neutral') return 'yellow';
+  return 'green';
+}
+
+function formatDate(dateStr: string): string {
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
 function ActivityItem({ severity, text, date }: { severity: 'red' | 'yellow' | 'green'; text: string; date: string }) {
