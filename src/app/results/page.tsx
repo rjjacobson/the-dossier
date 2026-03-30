@@ -1,16 +1,29 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
 import { LevelGroup } from '@/components/LevelGroup';
-import { LEVEL_GROUP_ORDER, LEVEL_TO_GROUP, STATEWIDE_LEVELS } from '@/lib/constants';
+import { LEVEL_GROUP_ORDER, LEVEL_TO_GROUP } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/server';
-import type { OfficialWithGrade, OfficeLevelGroup, OfficeLevel } from '@/lib/types';
+import type { OfficialWithGrade, OfficeLevelGroup } from '@/lib/types';
 
-async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippets: Record<number, string> }> {
+async function getOfficialsForLocation(lat: number, lng: number): Promise<{ officials: OfficialWithGrade[]; snippets: Record<number, string> }> {
   const supabase = await createClient();
 
+  // Use PostGIS spatial function to find officials for this location
+  const { data: matchedIds, error: rpcError } = await supabase
+    .rpc('find_officials_by_location', { p_lat: lat, p_lng: lng });
+
+  if (rpcError || !matchedIds || matchedIds.length === 0) {
+    console.error('Spatial lookup failed:', rpcError);
+    return { officials: [], snippets: {} };
+  }
+
+  const ids = matchedIds.map((r: { official_id: number }) => r.official_id);
+
+  // Get those officials with grades
   const { data: officials, error } = await supabase
     .from('officials_with_grades')
     .select('*')
+    .in('id', ids)
     .order('level')
     .order('name');
 
@@ -19,14 +32,8 @@ async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippet
     return { officials: [], snippets: {} };
   }
 
-  // Until district boundaries are imported, only show officials who represent
-  // everyone (statewide/citywide roles). District-level officials (congress members,
-  // state senate/assembly, city council, etc.) require address-to-district matching.
-  const filtered = (officials as OfficialWithGrade[]).filter((o) =>
-    STATEWIDE_LEVELS.has(o.level as OfficeLevel)
-  );
-
-  const officialIds = filtered.map((o) => o.id);
+  // Get snippets
+  const officialIds = officials.map((o: OfficialWithGrade) => o.id);
   const { data: evidenceSnippets } = await supabase
     .from('evidence')
     .select('official_id, quote')
@@ -45,11 +52,11 @@ async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippet
     }
   }
 
-  return { officials: filtered, snippets };
+  return { officials: officials as OfficialWithGrade[], snippets };
 }
 
-async function ResultsContent({ address }: { address: string }) {
-  const { officials, snippets } = await getOfficials();
+async function ResultsContent({ address, lat, lng }: { address: string; lat: number; lng: number }) {
+  const { officials, snippets } = await getOfficialsForLocation(lat, lng);
 
   const grouped: Record<OfficeLevelGroup, OfficialWithGrade[]> = {
     'Federal': [],
@@ -66,6 +73,9 @@ async function ResultsContent({ address }: { address: string }) {
   }
 
   const hasOfficials = officials.length > 0;
+  const hasDistrictOfficials = officials.some((o) =>
+    ['federal_house', 'state_senate', 'state_assembly', 'city_council'].includes(o.level)
+  );
 
   return (
     <div className="max-w-[720px] mx-auto px-4 py-8">
@@ -77,7 +87,7 @@ async function ResultsContent({ address }: { address: string }) {
       {!hasOfficials ? (
         <div className="text-center py-12">
           <p className="text-gray-500 mb-2">We don&apos;t have coverage for this area yet.</p>
-          <p className="text-sm text-gray-400">Help us by suggesting an official to track.</p>
+          <p className="text-sm text-gray-400">This tool covers New York state. Try a NY address.</p>
         </div>
       ) : (
         <>
@@ -93,17 +103,18 @@ async function ResultsContent({ address }: { address: string }) {
             );
           })}
 
-          <div className="mt-6 p-3 bg-blue-50 rounded-md">
-            <p className="text-[12px] text-blue-700">
-              Showing statewide and citywide officials. District-level representatives
-              (US House, State Senate, State Assembly, City Council) coming soon with
-              address-specific matching.
-            </p>
-          </div>
+          {!hasDistrictOfficials && (
+            <div className="mt-4 p-3 bg-blue-50 rounded-md">
+              <p className="text-[12px] text-blue-700">
+                Showing statewide and citywide officials. We&apos;re still adding district-level
+                representatives for some areas. Check back soon.
+              </p>
+            </div>
+          )}
         </>
       )}
 
-      <div className="mt-4">
+      <div className="mt-6">
         <Link href="/" className="text-sm text-[#1a3a5c] hover:underline">
           ← Look up another address
         </Link>
@@ -119,10 +130,12 @@ export default async function ResultsPage({
 }) {
   const params = await searchParams;
   const address = params.address || 'New York, NY';
+  const lat = parseFloat(params.lat || '40.7128');
+  const lng = parseFloat(params.lng || '-74.006');
 
   return (
     <Suspense fallback={<ResultsSkeleton />}>
-      <ResultsContent address={address} />
+      <ResultsContent address={address} lat={lat} lng={lng} />
     </Suspense>
   );
 }

@@ -62,14 +62,29 @@ export function AddressInput() {
       if (!res.ok) return;
       const data = await res.json();
 
+      // Parse user input into tokens for prefix matching
+      const inputTokens = query.trim().toLowerCase().split(/\s+/);
+
       const results: Suggestion[] = (data.features || [])
         .filter((f: PhotonFeature) => {
           const p = f.properties;
-          // Must be in New York state
           if (p.state !== 'New York') return false;
-          // Must have a street
           if (!p.street) return false;
-          return true;
+
+          // Build the full address text for matching
+          const addressText = [
+            p.housenumber,
+            p.street,
+            p.locality,
+            p.district,
+            p.city,
+          ].filter(Boolean).join(' ').toLowerCase();
+
+          // Every input token must prefix-match a word in the address
+          const addressWords = addressText.split(/[\s,]+/);
+          return inputTokens.every((token) =>
+            addressWords.some((word) => word.startsWith(token))
+          );
         })
         .map((f: PhotonFeature) => {
           const p = f.properties;
