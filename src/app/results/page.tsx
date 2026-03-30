@@ -1,14 +1,13 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
 import { LevelGroup } from '@/components/LevelGroup';
-import { LEVEL_GROUP_ORDER, LEVEL_TO_GROUP } from '@/lib/constants';
+import { LEVEL_GROUP_ORDER, LEVEL_TO_GROUP, STATEWIDE_LEVELS } from '@/lib/constants';
 import { createClient } from '@/lib/supabase/server';
-import type { OfficialWithGrade, OfficeLevelGroup } from '@/lib/types';
+import type { OfficialWithGrade, OfficeLevelGroup, OfficeLevel } from '@/lib/types';
 
 async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippets: Record<number, string> }> {
   const supabase = await createClient();
 
-  // Get all officials with computed grades via the view
   const { data: officials, error } = await supabase
     .from('officials_with_grades')
     .select('*')
@@ -20,8 +19,14 @@ async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippet
     return { officials: [], snippets: {} };
   }
 
-  // Get one snippet (most recent evidence quote) per official
-  const officialIds = officials.map((o: OfficialWithGrade) => o.id);
+  // Until district boundaries are imported, only show officials who represent
+  // everyone (statewide/citywide roles). District-level officials (congress members,
+  // state senate/assembly, city council, etc.) require address-to-district matching.
+  const filtered = (officials as OfficialWithGrade[]).filter((o) =>
+    STATEWIDE_LEVELS.has(o.level as OfficeLevel)
+  );
+
+  const officialIds = filtered.map((o) => o.id);
   const { data: evidenceSnippets } = await supabase
     .from('evidence')
     .select('official_id, quote')
@@ -40,13 +45,12 @@ async function getOfficials(): Promise<{ officials: OfficialWithGrade[]; snippet
     }
   }
 
-  return { officials: officials as OfficialWithGrade[], snippets };
+  return { officials: filtered, snippets };
 }
 
 async function ResultsContent({ address }: { address: string }) {
   const { officials, snippets } = await getOfficials();
 
-  // Group officials by level group
   const grouped: Record<OfficeLevelGroup, OfficialWithGrade[]> = {
     'Federal': [],
     'State': [],
@@ -67,7 +71,7 @@ async function ResultsContent({ address }: { address: string }) {
     <div className="max-w-[720px] mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-bold text-gray-900">Your Representatives</h2>
-        <div className="text-[13px] text-gray-500 text-right">{address}</div>
+        <div className="text-[13px] text-gray-500 text-right max-w-[250px]">{address}</div>
       </div>
 
       {!hasOfficials ? (
@@ -76,20 +80,30 @@ async function ResultsContent({ address }: { address: string }) {
           <p className="text-sm text-gray-400">Help us by suggesting an official to track.</p>
         </div>
       ) : (
-        LEVEL_GROUP_ORDER.map((group) => {
-          if (grouped[group].length === 0) return null;
-          return (
-            <LevelGroup
-              key={group}
-              label={group}
-              officials={grouped[group]}
-              snippets={snippets}
-            />
-          );
-        })
+        <>
+          {LEVEL_GROUP_ORDER.map((group) => {
+            if (grouped[group].length === 0) return null;
+            return (
+              <LevelGroup
+                key={group}
+                label={group}
+                officials={grouped[group]}
+                snippets={snippets}
+              />
+            );
+          })}
+
+          <div className="mt-6 p-3 bg-blue-50 rounded-md">
+            <p className="text-[12px] text-blue-700">
+              Showing statewide and citywide officials. District-level representatives
+              (US House, State Senate, State Assembly, City Council) coming soon with
+              address-specific matching.
+            </p>
+          </div>
+        </>
       )}
 
-      <div className="mt-6">
+      <div className="mt-4">
         <Link href="/" className="text-sm text-[#1a3a5c] hover:underline">
           ← Look up another address
         </Link>

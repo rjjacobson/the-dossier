@@ -66,6 +66,20 @@ export const LEVEL_TO_GROUP: Record<OfficeLevel, OfficeLevelGroup> = {
   district_leader: 'Political',
 };
 
+// Officials at these levels represent ALL constituents in their jurisdiction
+// (not district-specific). Safe to show for any address in NY.
+export const STATEWIDE_LEVELS: Set<OfficeLevel> = new Set([
+  'federal_president',
+  'federal_senate',
+  'state_governor',
+  'state_lt_governor',
+  'state_ag',
+  'state_comptroller',
+  'city_mayor',
+  'city_comptroller',
+  'city_public_advocate',
+]);
+
 export const LEVEL_LABELS: Record<OfficeLevel, string> = {
   federal_president: 'President',
   federal_senate: 'US Senate',
