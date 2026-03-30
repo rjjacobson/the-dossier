@@ -54,8 +54,15 @@ export function NYCMap() {
     if (!mapRef.current || mapLoaded) return;
 
     async function initMap() {
+      // Add Leaflet CSS via link tag (Turbopack can't handle CSS imports from node_modules)
+      if (!document.querySelector('link[href*="leaflet"]')) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+        document.head.appendChild(link);
+      }
+
       const L = (await import('leaflet')).default;
-      await import('leaflet/dist/leaflet.css');
 
       if (!mapRef.current) return;
 
