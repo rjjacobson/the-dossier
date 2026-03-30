@@ -3,21 +3,29 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
-interface Suggestion {
-  display_name: string;
-  lat: string;
-  lon: string;
-  type?: string;
-  class?: string;
-  address?: {
-    house_number?: string;
-    road?: string;
-    neighbourhood?: string;
-    suburb?: string;
+interface PhotonFeature {
+  properties: {
+    osm_key?: string;
+    osm_value?: string;
+    name?: string;
+    housenumber?: string;
+    street?: string;
+    locality?: string;
+    district?: string;
     city?: string;
     state?: string;
     postcode?: string;
+    countrycode?: string;
   };
+  geometry: {
+    coordinates: [number, number]; // [lon, lat]
+  };
+}
+
+interface Suggestion {
+  label: string;
+  lat: number;
+  lng: number;
 }
 
 export function AddressInput() {
@@ -32,48 +40,51 @@ export function AddressInput() {
   const router = useRouter();
 
   const fetchSuggestions = useCallback(async (query: string) => {
-    if (query.length < 3) {
+    if (query.length < 5) {
       setSuggestions([]);
+      setShowSuggestions(false);
       return;
     }
 
     try {
-      // Append "New York" if not present to bias results
+      // Photon API - designed for autocomplete, biased toward NYC
       const searchQuery = /new york|ny|nyc|brooklyn|queens|bronx|manhattan|staten island/i.test(query)
         ? query
         : `${query}, New York`;
 
       const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?` +
+        `https://photon.komoot.io/api/?` +
         `q=${encodeURIComponent(searchQuery)}` +
-        `&format=json&addressdetails=1&limit=5` +
-        `&countrycodes=us` +
-        `&viewbox=-74.26,40.49,-73.7,40.92&bounded=1`,
-        { headers: { 'Accept': 'application/json' } }
+        `&lat=40.7128&lon=-73.95` +
+        `&limit=5&lang=en&layer=house&layer=street`,
       );
 
       if (!res.ok) return;
-      const data: Suggestion[] = await res.json();
+      const data = await res.json();
 
-      // Filter to actual addresses (not landmarks/POIs) and NY results
-      const nySuggestions = data
-        .filter((s) => {
-          if (!s.display_name.includes('New York')) return false;
-          // Only keep place types that are addresses, not landmarks
-          const excludeTypes = ['tourism', 'amenity', 'shop', 'leisure', 'historic', 'building'];
-          if (s.class && excludeTypes.includes(s.class)) return false;
+      const results: Suggestion[] = (data.features || [])
+        .filter((f: PhotonFeature) => {
+          const p = f.properties;
+          // Must be in New York state
+          if (p.state !== 'New York') return false;
+          // Must have a street
+          if (!p.street) return false;
           return true;
         })
-        .map((s) => ({
-          ...s,
-          display_name: formatAddress(s),
-        }));
+        .map((f: PhotonFeature) => {
+          const p = f.properties;
+          return {
+            label: formatPhotonResult(p),
+            lat: f.geometry.coordinates[1],
+            lng: f.geometry.coordinates[0],
+          };
+        });
 
-      // Deduplicate by display name
+      // Deduplicate by label
       const seen = new Set<string>();
-      const unique = nySuggestions.filter((s) => {
-        if (seen.has(s.display_name)) return false;
-        seen.add(s.display_name);
+      const unique = results.filter((s: Suggestion) => {
+        if (seen.has(s.label)) return false;
+        seen.add(s.label);
         return true;
       });
 
@@ -81,38 +92,32 @@ export function AddressInput() {
       setShowSuggestions(unique.length > 0);
       setSelectedIndex(-1);
     } catch {
-      // Silently fail autocomplete, user can still type and submit
+      // Silently fail, user can still type and submit
     }
   }, []);
 
-  function formatAddress(s: Suggestion): string {
-    // Build a clean address from structured parts if available
-    if (s.address) {
-      const parts: string[] = [];
-      if (s.address.house_number && s.address.road) {
-        parts.push(`${s.address.house_number} ${s.address.road}`);
-      } else if (s.address.road) {
-        parts.push(s.address.road);
-      }
-      if (s.address.suburb || s.address.neighbourhood) {
-        parts.push(s.address.suburb || s.address.neighbourhood || '');
-      }
-      if (s.address.city && s.address.city !== 'City of New York') {
-        parts.push(s.address.city);
-      }
-      if (s.address.postcode) {
-        parts.push(`NY ${s.address.postcode}`);
-      } else {
-        parts.push('NY');
-      }
-      if (parts.length >= 2) return parts.filter(Boolean).join(', ');
+  function formatPhotonResult(p: PhotonFeature['properties']): string {
+    const parts: string[] = [];
+
+    if (p.housenumber && p.street) {
+      parts.push(`${p.housenumber} ${p.street}`);
+    } else if (p.street) {
+      parts.push(p.street);
     }
 
-    // Fallback: clean the display name
-    return s.display_name
-      .replace(/, United States$/, '')
-      .replace(/, New York, New York/, ', New York')
-      .replace(/County, New York/, 'NY');
+    if (p.locality) {
+      parts.push(p.locality);
+    } else if (p.district) {
+      parts.push(p.district);
+    }
+
+    if (p.city && p.city !== 'City of New York' && p.city !== 'New York') {
+      parts.push(p.city);
+    }
+
+    parts.push(p.postcode ? `NY ${p.postcode}` : 'NY');
+
+    return parts.join(', ');
   }
 
   function handleInputChange(value: string) {
@@ -124,13 +129,15 @@ export function AddressInput() {
   }
 
   function selectSuggestion(suggestion: Suggestion) {
-    setAddress(suggestion.display_name);
+    setAddress(suggestion.label);
     setSuggestions([]);
     setShowSuggestions(false);
     setSelectedIndex(-1);
 
-    // Submit directly with the geocoded coordinates
-    submitWithCoords(suggestion.display_name, parseFloat(suggestion.lat), parseFloat(suggestion.lon));
+    // Navigate directly with coordinates
+    const roundedLat = Math.round(suggestion.lat * 100000) / 100000;
+    const roundedLng = Math.round(suggestion.lng * 100000) / 100000;
+    router.push(`/results?lat=${roundedLat}&lng=${roundedLng}&address=${encodeURIComponent(suggestion.label)}`);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -148,17 +155,6 @@ export function AddressInput() {
     } else if (e.key === 'Escape') {
       setShowSuggestions(false);
     }
-  }
-
-  async function submitWithCoords(displayAddress: string, lat: number, lng: number) {
-    setLoading(true);
-    setError('');
-
-    const roundedLat = Math.round(lat * 100000) / 100000;
-    const roundedLng = Math.round(lng * 100000) / 100000;
-
-    router.push(`/results?lat=${roundedLat}&lng=${roundedLng}&address=${encodeURIComponent(displayAddress)}`);
-    setLoading(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -228,7 +224,7 @@ export function AddressInput() {
             >
               {suggestions.map((suggestion, i) => (
                 <li
-                  key={i}
+                  key={`${suggestion.label}-${i}`}
                   role="option"
                   aria-selected={i === selectedIndex}
                   className={`px-4 py-2.5 text-[13px] text-gray-700 cursor-pointer border-b border-gray-50 last:border-0 ${
@@ -237,7 +233,7 @@ export function AddressInput() {
                   onClick={() => selectSuggestion(suggestion)}
                   onMouseEnter={() => setSelectedIndex(i)}
                 >
-                  {suggestion.display_name}
+                  {suggestion.label}
                 </li>
               ))}
             </ul>
