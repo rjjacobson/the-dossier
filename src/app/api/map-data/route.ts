@@ -30,4 +30,4 @@ export async function GET() {
   });
 }
 
-export { COUNCIL_DISTRICT_MAP };
+// COUNCIL_DISTRICT_MAP available for reference but not exported from route

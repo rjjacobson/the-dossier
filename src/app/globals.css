@@ -1,5 +1,4 @@
-@import "tailwindcss/preflight" layer(base);
-@import "tailwindcss/utilities" layer(utilities);
+@import "tailwindcss";
 
 :root {
   --primary: #1a3a5c;
