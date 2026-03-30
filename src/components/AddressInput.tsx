@@ -7,6 +7,17 @@ interface Suggestion {
   display_name: string;
   lat: string;
   lon: string;
+  type?: string;
+  class?: string;
+  address?: {
+    house_number?: string;
+    road?: string;
+    neighbourhood?: string;
+    suburb?: string;
+    city?: string;
+    state?: string;
+    postcode?: string;
+  };
 }
 
 export function AddressInput() {
@@ -44,25 +55,61 @@ export function AddressInput() {
       if (!res.ok) return;
       const data: Suggestion[] = await res.json();
 
-      // Filter to NY state results and clean display names
+      // Filter to actual addresses (not landmarks/POIs) and NY results
       const nySuggestions = data
-        .filter((s) => s.display_name.includes('New York'))
+        .filter((s) => {
+          if (!s.display_name.includes('New York')) return false;
+          // Only keep place types that are addresses, not landmarks
+          const excludeTypes = ['tourism', 'amenity', 'shop', 'leisure', 'historic', 'building'];
+          if (s.class && excludeTypes.includes(s.class)) return false;
+          return true;
+        })
         .map((s) => ({
           ...s,
-          display_name: cleanDisplayName(s.display_name),
+          display_name: formatAddress(s),
         }));
 
-      setSuggestions(nySuggestions);
-      setShowSuggestions(nySuggestions.length > 0);
+      // Deduplicate by display name
+      const seen = new Set<string>();
+      const unique = nySuggestions.filter((s) => {
+        if (seen.has(s.display_name)) return false;
+        seen.add(s.display_name);
+        return true;
+      });
+
+      setSuggestions(unique);
+      setShowSuggestions(unique.length > 0);
       setSelectedIndex(-1);
     } catch {
       // Silently fail autocomplete, user can still type and submit
     }
   }, []);
 
-  function cleanDisplayName(name: string): string {
-    // Remove "United States" and excessive detail
-    return name
+  function formatAddress(s: Suggestion): string {
+    // Build a clean address from structured parts if available
+    if (s.address) {
+      const parts: string[] = [];
+      if (s.address.house_number && s.address.road) {
+        parts.push(`${s.address.house_number} ${s.address.road}`);
+      } else if (s.address.road) {
+        parts.push(s.address.road);
+      }
+      if (s.address.suburb || s.address.neighbourhood) {
+        parts.push(s.address.suburb || s.address.neighbourhood || '');
+      }
+      if (s.address.city && s.address.city !== 'City of New York') {
+        parts.push(s.address.city);
+      }
+      if (s.address.postcode) {
+        parts.push(`NY ${s.address.postcode}`);
+      } else {
+        parts.push('NY');
+      }
+      if (parts.length >= 2) return parts.filter(Boolean).join(', ');
+    }
+
+    // Fallback: clean the display name
+    return s.display_name
       .replace(/, United States$/, '')
       .replace(/, New York, New York/, ', New York')
       .replace(/County, New York/, 'NY');

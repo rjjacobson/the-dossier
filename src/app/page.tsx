@@ -1,4 +1,5 @@
 import { AddressInput } from '@/components/AddressInput';
+import { MapWrapper } from '@/components/MapWrapper';
 import { createClient } from '@/lib/supabase/server';
 
 interface RecentActivity {
@@ -64,6 +65,8 @@ export default async function Home() {
         </p>
         <AddressInput />
       </div>
+
+      <MapWrapper />
 
       {activity.length > 0 && (
         <div className="border-t border-gray-100 pt-5 pb-12">
